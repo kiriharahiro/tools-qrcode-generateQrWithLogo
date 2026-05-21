@@ -1,0 +1,148 @@
+/**
+ * ロゴ付きQRコード生成スクリプト
+ * 
+ * 概要：
+ * 指定シートの情報を元に、中心にロゴ画像を配置したQRコードを生成します。
+ * QuickChart APIを利用してQR画像を生成し、スプレッドシートのIMAGE関数としてセルに挿入します。
+ * また、B6セルのテキスト量に合わせて列幅を自動調整する機能を備えています。
+ * 
+ * 使用方法：
+ * 1. 「QR生成」シートを作成する。
+ * 2. B2セル：QRコードにする文字列（URLなど）を入力。
+ * 3. B3セル：中心に置くロゴ画像のGoogleドライブ共有URLを入力。
+ * 4. B4セル：ラベル等のテキストを入力。
+ * 
+ * @author  Hiroshi Kirihara
+ * @date    2026-05-21
+ */
+
+function generateIconQRCode() {
+  /** @constant {string} 対象とするシート名 */
+  const TARGET_SHEET_NAME = "QR生成";
+
+  /** @constant {number} QRコードの生成サイズ(px) */
+  const QR_SIZE = 400;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(TARGET_SHEET_NAME);
+
+  if (!sheet) {
+    Browser.msgBox(`「${TARGET_SHEET_NAME}」という名前のシートが見つかりません。`);
+    return;
+  }
+  
+  // 1. シートからデータの取得
+  const rangeB2 = sheet.getRange("B2");
+  const rangeB3 = sheet.getRange("B3");
+  const rangeB6 = sheet.getRange("B6"); 
+  
+  const qrText = rangeB2.getValue(); 
+  let driveUrl = rangeB3.getValue(); 
+  
+  // 数式内にURLが含まれている場合の抽出処理
+  if (rangeB3.getFormula()) {
+    const formula = rangeB3.getFormula();
+    const formulaMatch = formula.match(/"(https:\/\/.*?)"/);
+    if (formulaMatch) {
+      driveUrl = formulaMatch[1];
+    }
+  }
+  
+  // バリデーション：入力チェック
+  if (!qrText) {
+    Browser.msgBox("B2セルにQRコードにする文字列（URL等）が見つかりません。");
+    return;
+  }
+  
+  if (!driveUrl || typeof driveUrl !== 'string') {
+    Browser.msgBox("B3セルに画像URLが見つかりません。");
+    return;
+  }
+  
+  // 2. GoogleドライブのURLからファイルIDを抽出
+  let fileId = "";
+  const match = driveUrl.match(/[\w-]{25,}(?=\b)/);
+  if (match) {
+    fileId = match[0];
+  } else {
+    Browser.msgBox("B3セルのGoogleドライブURLから画像IDを読み取れませんでした。");
+    return;
+  }
+  
+  // 3. 外部APIに渡すための直リンクURL（Googleドライブのプレビュー用URLを構築）
+  const directImageUrl = `https://drive.google.com/uc?export=view&id=${fileId}`;
+  
+  // 4. アイコン付きQRコードを生成する外部API（QuickChart）のURLを組み立て
+  const apiUrl = "https://quickchart.io/qr?" + 
+    "text=" + encodeURIComponent(qrText) + 
+    "&size=" + QR_SIZE +
+    "&backgroundColor=white" + 
+    "&margin=2" +              
+    "&centerImageUrl=" + encodeURIComponent(directImageUrl) + 
+    "&centerImageSizeRatio=0.22"; 
+
+  try {
+    const targetCell = sheet.getRange("B7"); 
+    
+    // 5. 以前の「浮いている画像（OverGridImage）」が残っていたら重複を避けるため削除
+    const images = sheet.getImages();
+    for (let i = 0; i < images.length; i++) {
+      const anchor = images[i].getAnchorCell();
+      if (anchor.getRow() === targetCell.getRow() && anchor.getColumn() === targetCell.getColumn()) {
+        images[i].remove();
+      }
+    }
+
+    // B6セルにB4セルを引用する数式をセット
+    rangeB6.setFormula("=B4");
+    
+    // 6. 全角・半角の横幅の違いを考慮して、B6の文字が絶対に欠けない幅を計算
+    const b6Text = rangeB6.getValue().toString();
+    const lines = b6Text.split("\n");
+    let maxVisualWidth = 0; 
+    
+    for (let i = 0; i < lines.length; i++) {
+      let currentLineFormulaWidth = 0;
+      const currentLine = lines[i];
+      
+      for (let j = 0; j < currentLine.length; j++) {
+        const char = currentLine.charCodeAt(j);
+        if (char >= 0x0000 && char <= 0x007e) {
+          currentLineFormulaWidth += 1;
+        } else {
+          currentLineFormulaWidth += 2;
+        }
+      }
+      
+      if (currentLineFormulaWidth > maxVisualWidth) {
+        maxVisualWidth = currentLineFormulaWidth;
+      }
+    }
+    
+    let calculatedWidth = Math.ceil(maxVisualWidth * 7.5) + 50;
+    if (calculatedWidth < 170) {
+      calculatedWidth = 170;
+    }
+    
+    sheet.setColumnWidth(2, calculatedWidth);
+    sheet.setRowHeight(targetCell.getRow(), 160);
+    
+    // 8. B7セルの中にIMAGE関数を書き込み、配置を調整
+    targetCell.setFormula(`=IMAGE("${apiUrl}", 1)`);
+    targetCell.setHorizontalAlignment("center");
+    targetCell.setVerticalAlignment("middle");
+    
+    // 変更を即座に反映
+    SpreadsheetApp.flush();
+
+    // 9. B6:B7を選択状態にする
+    // これにより、スクリプト終了後に Ctrl+C を押すだけでコピー可能になります
+    sheet.getRange("B6:B7").activate();
+
+    console.log("QRコードの生成・配置が正常に完了しました。対象範囲を選択しました。");
+    
+  } catch (error) {
+    console.error("エラー詳細: ", error.toString());
+    Browser.msgBox("QRコードの作成に失敗しました。\nエラー内容: " + error.toString());
+  }
+}
