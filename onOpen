@@ -1,0 +1,20 @@
+/**
+ * スプレッドシート起動時のメニュー作成
+ * 
+ * 概要：
+ * ファイルを開いた際に、スプレッドシートの上部ツールバーに
+ * 独自の操作メニューを追加します。
+ * 
+ * @author  Hiroshi Kirihara
+ * @date    2026-05-21
+ */
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+
+  // カスタムメニューの構築
+  ui.createMenu('カスタム操作')
+    .addItem('ロゴ入りQRコードを生成', 'generateIconQRCode')
+    .addSeparator() // 区切り線
+    .addToUi();
+}
